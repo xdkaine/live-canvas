@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Collaborative Canvas</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="toolbar">
+        <div class="app-title">Live Canvas</div>
+        
+        <div class="toolbar-section">
+            <label for="colorPicker">Color</label>
+            <div class="color-selector">
+                <input type="color" id="colorPicker" class="color-picker tooltip" value="#000000" data-tooltip="Custom color picker">
+                <div class="color-palette">
+                    <div class="color-swatch" data-color="#000000" style="background-color: #000000;" title="Black"></div>
+                    <div class="color-swatch" data-color="#FF6B6B" style="background-color: #FF6B6B;" title="Red"></div>
+                    <div class="color-swatch" data-color="#4ECDC4" style="background-color: #4ECDC4;" title="Teal"></div>
+                    <div class="color-swatch" data-color="#45B7D1" style="background-color: #45B7D1;" title="Blue"></div>
+                    <div class="color-swatch" data-color="#96CEB4" style="background-color: #96CEB4;" title="Green"></div>
+                    <div class="color-swatch" data-color="#FFEAA7" style="background-color: #FFEAA7;" title="Yellow"></div>
+                    <div class="color-swatch" data-color="#DDA0DD" style="background-color: #DDA0DD;" title="Purple"></div>
+                    <div class="color-swatch" data-color="#FFA07A" style="background-color: #FFA07A;" title="Orange"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="toolbar-section">
+            <label for="brushSize">Brush Size</label>
+            <div class="brush-size-container">
+                <input type="range" id="brushSize" class="brush-size tooltip" min="1" max="20" value="2" data-tooltip="Adjust brush thickness">
+                <div class="size-indicator" id="brushSizeValue">2</div>
+            </div>
+        </div>
+        
+        <div class="toolbar-section">
+            <label>Zoom</label>
+            <div class="zoom-controls">
+                <button id="zoomOut" class="btn-primary zoom-btn tooltip" data-tooltip="Zoom out">
+                    <span>🔍-</span>
+                </button>
+                <span id="zoomLevel" class="zoom-indicator">100%</span>
+                <button id="zoomIn" class="btn-primary zoom-btn tooltip" data-tooltip="Zoom in">
+                    <span>🔍+</span>
+                </button>
+                <button id="zoomReset" class="btn-primary zoom-btn tooltip" data-tooltip="Reset zoom">
+                    <span>🎯</span>
+                </button>
+            </div>
+        </div>
+        
+        <div class="toolbar-section">
+            <button id="clearCanvas" class="btn-danger tooltip" data-tooltip="Clear the entire canvas for all users">
+                <span>🗑️</span>
+                Clear Canvas
+            </button>
+            <button id="toggleChat" class="btn-primary tooltip" data-tooltip="Toggle chat panel">
+                <span>💬</span>
+                Chat
+            </button>
+        </div>
+        
+        <div class="toolbar-section">
+            <div class="status-badge disconnected" id="connectionStatus">Disconnected</div>
+            <div class="status-badge user-count" id="userCount">0 Users</div>
+        </div>
+    </div>
+    
+    <div id="canvas-container">
+        <canvas id="canvas"></canvas>
+    </div>
+    
+    <div class="loading" id="loading">Connecting...</div>
+    
+    <!-- Floating cursor info -->
+    <div id="cursorInfo" class="cursor-info">
+        <span id="cursorX">0</span>, <span id="cursorY">0</span>
+    </div>
+    
+    <!-- Chat Panel -->
+    <div id="chatPanel" class="chat-panel">
+        <div class="chat-header">
+            <h3>💬 Live Chat</h3>
+            <button id="closeChatBtn" class="close-btn">×</button>
+        </div>
+        <div id="chatMessages" class="chat-messages"></div>
+        <div class="chat-input-container">
+            <input type="text" id="chatInput" placeholder="Type a message..." maxlength="500">
+            <button id="sendChatBtn" class="send-btn">Send</button>
+        </div>
+    </div>
+    
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="canvas.js"></script>
+</body>
+</html>
