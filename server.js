@@ -54,13 +54,7 @@ let canvasState = {
 const connectedClients = new Map();
 
 io.on('connection', (socket) => {
-  console.log('🔌 User connected:', socket.id);
-  console.log('📡 Transport:', socket.conn.transport.name);
-  console.log('🌐 Headers:', {
-    origin: socket.handshake.headers.origin,
-    'user-agent': socket.handshake.headers['user-agent']?.substring(0, 50) + '...',
-    'cf-ray': socket.handshake.headers['cf-ray'] || 'Not from Cloudflare'
-  });
+  console.log('User connected:', socket.id);
   
   // Generate unique user ID and color
   const userId = uuidv4();
