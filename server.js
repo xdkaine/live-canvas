@@ -5,17 +5,40 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
+
+// middleware fix for cloudflare websockets
+app.use((req, res, next) => {
+  if (req.headers['cf-connecting-ip']) {
+    req.ip = req.headers['cf-connecting-ip'];
+  }
+  
+  if (req.headers['cf-ray']) {
+    res.setHeader('X-Cloudflare-Ray', req.headers['cf-ray']);
+  }
+  
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Origin');
+  
+  next();
+});
+
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
+    origin: process.env.TUNNEL_DOMAIN ? [process.env.TUNNEL_DOMAIN, `https://${process.env.TUNNEL_DOMAIN}`, "http://localhost:3003"] : "*",
+    methods: ["GET", "POST", "OPTIONS"],
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization", "Origin"]
   },
-  // cloudflare compatibility settings i hope
-  transports: ['websocket', 'polling'],
+  transports: ['polling', 'websocket'], 
   allowEIO3: true,
   pingTimeout: 60000,
-  pingInterval: 25000
+  pingInterval: 25000,
+  allowUpgrades: true,
+  cookie: false, 
+  serveClient: true,
+  path: '/socket.io/'
 });
 
 // Serve static files from public directory

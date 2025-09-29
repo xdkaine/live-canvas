@@ -2,12 +2,21 @@ class CollaborativeCanvas {
     constructor() {
         this.socket = io({
             //new cloudflare compatibility
-            transports: ['websocket', 'polling'],
+            transports: ['polling', 'websocket'], // Try polling first, then websocket
             timeout: 20000,
             reconnection: true,
             reconnectionDelay: 1000,
-            reconnectionAttempts: 5,
-            maxReconnectionAttempts: 5
+            reconnectionAttempts: 10,
+            maxReconnectionAttempts: 10,
+            forceNew: true,
+            path: '/socket.io/',
+            // Add headers for better Cloudflare compatibility
+            extraHeaders: {
+                'Origin': window.location.origin
+            },
+            // Handle cloudflare's connection management
+            pingTimeout: 60000,
+            pingInterval: 25000
         });
         this.canvas = document.getElementById('canvas');
         this.ctx = this.canvas.getContext('2d');
@@ -103,15 +112,51 @@ class CollaborativeCanvas {
     }
     
     setupSocketEvents() {
+        // Add comprehensive debugging for Cloudflare tunnel issues
+        console.log('Setting up socket events...');
+        console.log('Socket.IO client version:', io.version);
+        console.log('Current URL:', window.location.href);
+        console.log('WebSocket support:', typeof WebSocket !== 'undefined');
+        
         this.socket.on('connect', () => {
-            console.log('Connected to server');
+            console.log('✅ Connected to server successfully!');
+            console.log('Transport:', this.socket.io.engine.transport.name);
+            console.log('Socket ID:', this.socket.id);
             this.updateConnectionStatus(true);
             document.getElementById('loading').style.display = 'none';
         });
         
-        this.socket.on('disconnect', () => {
-            console.log('Disconnected from server');
+        this.socket.on('connect_error', (error) => {
+            console.error('❌ Connection error:', error);
+            console.log('Error type:', error.type);
+            console.log('Error description:', error.description);
             this.updateConnectionStatus(false);
+        });
+        
+        this.socket.on('disconnect', (reason) => {
+            console.log('🔌 Disconnected from server. Reason:', reason);
+            this.updateConnectionStatus(false);
+        });
+        
+        this.socket.on('reconnect', (attemptNumber) => {
+            console.log('🔄 Reconnected after', attemptNumber, 'attempts');
+        });
+        
+        this.socket.on('reconnect_attempt', (attemptNumber) => {
+            console.log('🔄 Reconnection attempt', attemptNumber);
+        });
+        
+        this.socket.on('reconnect_error', (error) => {
+            console.error('❌ Reconnection error:', error);
+        });
+        
+        this.socket.on('reconnect_failed', () => {
+            console.error('❌ Reconnection failed after maximum attempts');
+        });
+        
+        // Monitor transport changes
+        this.socket.io.on('upgrade', () => {
+            console.log('⬆️ Transport upgraded to:', this.socket.io.engine.transport.name);
         });
         
         this.socket.on('user-info', (userInfo) => {

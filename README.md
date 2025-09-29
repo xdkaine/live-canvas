@@ -26,6 +26,64 @@ A real-time collaborative drawing application built with Node.js, Express, Socke
 - Drawing events are immediately broadcast to all connected clients
 - Server ensures all clients receive the same drawing events in the same order
 
+## Cloudflare Tunnel Configuration
+
+If you're experiencing WebSocket connection issues when using Cloudflare Tunnel, this is due to how Cloudflare handles WebSocket connections. Here are the solutions:
+
+### 1. Cloudflare Tunnel Configuration
+
+Make sure your `cloudflared` tunnel configuration includes WebSocket support. In your tunnel config file (e.g., `config.yml`):
+
+```yaml
+tunnel: your-tunnel-id
+credentials-file: /path/to/your/credentials.json
+
+ingress:
+  - hostname: your-domain.com
+    service: http://localhost:3003
+    originRequest:
+      noTLSVerify: true
+      # Important: Enable WebSocket support
+      httpHostHeader: your-domain.com
+  - service: http_status:404
+```
+
+### 2. Cloudflare Dashboard Settings
+
+In your Cloudflare dashboard for your domain:
+- Go to **Network** tab
+- Enable **WebSockets** (this is crucial!)
+- Consider disabling **Browser Integrity Check** if you're still having issues
+- Make sure **Brotli compression** is disabled for your domain
+
+### 3. Additional Troubleshooting
+
+If WebSockets still don't work:
+1. Check the browser console for detailed connection errors (now included in the app)
+2. Try accessing your site using `https://` instead of `http://`
+3. Consider using polling transport only by updating the client configuration:
+   ```javascript
+   this.socket = io({
+       transports: ['polling'] // Force polling only
+   });
+   ```
+
+### 4. Alternative: Use Cloudflare Tunnel with --protocol http2
+
+Run your tunnel with HTTP/2 protocol:
+```bash
+cloudflared tunnel --protocol http2 run your-tunnel-name
+```
+
+### 5. Environment Variable Configuration
+
+You can also set your Cloudflare tunnel domain as an environment variable for CORS configuration:
+```bash
+export TUNNEL_DOMAIN=your-domain.com
+```
+
+Then update the server CORS configuration to use this domain instead of "*" for better security.
+
 ## Installation
 
 1. Clone or download this repository
