@@ -1,8 +1,9 @@
 const express = require('express');
 const http = require('http');
-const socketIo = require('socket.io');
+const WebSocket = require('ws');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const url = require('url');
 
 const app = express();
 
@@ -24,21 +25,16 @@ app.use((req, res, next) => {
 });
 
 const server = http.createServer(app);
-const io = socketIo(server, {
-  cors: {
-    origin: process.env.TUNNEL_DOMAIN ? [process.env.TUNNEL_DOMAIN, `https://${process.env.TUNNEL_DOMAIN}`, "http://localhost:3003"] : "*",
-    methods: ["GET", "POST", "OPTIONS"],
-    credentials: true,
-    allowedHeaders: ["Content-Type", "Authorization", "Origin"]
-  },
-  transports: ['polling', 'websocket'], 
-  allowEIO3: true,
-  pingTimeout: 60000,
-  pingInterval: 25000,
-  allowUpgrades: true,
-  cookie: false, 
-  serveClient: true,
-  path: '/socket.io/'
+
+// Create WebSocket server
+const wss = new WebSocket.Server({ 
+  server,
+  path: '/ws',
+  // Cloudflare-friendly options
+  verifyClient: (info) => {
+    // Accept connections from any origin for now
+    return true;
+  }
 });
 
 // Serve static files from public directory
@@ -53,8 +49,25 @@ let canvasState = {
 // Store active connections
 const connectedClients = new Map();
 
-io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+// Utility function to send message to all clients
+function broadcast(message, excludeWs = null) {
+  wss.clients.forEach((client) => {
+    if (client !== excludeWs && client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(message));
+    }
+  });
+}
+
+// Utility function to send message to specific client
+function sendToClient(ws, message) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(message));
+  }
+}
+
+wss.on('connection', (ws, req) => {
+  const connectionId = uuidv4();
+  console.log('User connected:', connectionId);
   
   // Generate unique user ID and color
   const userId = uuidv4();
@@ -63,134 +76,194 @@ io.on('connection', (socket) => {
   // Store user information
   const userInfo = {
     id: userId,
-    socketId: socket.id,
+    socketId: connectionId,
     color: userColor,
     cursor: { x: 0, y: 0 }
   };
   
   canvasState.users.set(userId, userInfo);
-  connectedClients.set(socket.id, userId);
+  connectedClients.set(ws, userId);
   
   // Send current canvas state to new user
-  socket.emit('canvas-state', {
-    strokes: canvasState.strokes,
-    users: Array.from(canvasState.users.values())
+  sendToClient(ws, {
+    type: 'canvas-state',
+    data: {
+      strokes: canvasState.strokes,
+      users: Array.from(canvasState.users.values())
+    }
   });
   
   // Send user their assigned color
-  socket.emit('user-info', userInfo);
+  sendToClient(ws, {
+    type: 'user-info',
+    data: userInfo
+  });
   
   // Broadcast new user to all other clients
-  socket.broadcast.emit('user-joined', userInfo);
+  broadcast({
+    type: 'user-joined',
+    data: userInfo
+  }, ws);
   
-  // Handle drawing events
-  socket.on('draw-start', (data) => {
-    const stroke = {
-      id: uuidv4(),
-      userId: connectedClients.get(socket.id),
-      color: data.color || userColor,
-      width: data.width || 2,
-      points: [{ x: data.x, y: data.y }],
-      timestamp: Date.now()
-    };
-    
-    canvasState.strokes.push(stroke);
-    
-    // Broadcast to all clients including sender
-    io.emit('draw-start', stroke);
-  });
-  
-  socket.on('draw-continue', (data) => {
-    const userId = connectedClients.get(socket.id);
-    const currentStroke = canvasState.strokes.find(stroke => 
-      stroke.userId === userId && stroke.id === data.strokeId
-    );
-    
-    if (currentStroke) {
-      currentStroke.points.push({ x: data.x, y: data.y });
+  // Handle WebSocket messages
+  ws.on('message', (message) => {
+    try {
+      const { type, data } = JSON.parse(message);
+      const userId = connectedClients.get(ws);
       
-      // Broadcast to all clients including sender
-      io.emit('draw-continue', {
-        strokeId: data.strokeId,
-        x: data.x,
-        y: data.y
-      });
+      switch (type) {
+        case 'draw-start':
+          const stroke = {
+            id: uuidv4(),
+            userId: userId,
+            color: data.color || userColor,
+            width: data.width || 2,
+            points: [{ x: data.x, y: data.y }],
+            timestamp: Date.now()
+          };
+          
+          canvasState.strokes.push(stroke);
+          
+          // Broadcast to all clients including sender
+          wss.clients.forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify({
+                type: 'draw-start',
+                data: stroke
+              }));
+            }
+          });
+          break;
+          
+        case 'draw-continue':
+          const currentStroke = canvasState.strokes.find(stroke => 
+            stroke.userId === userId && stroke.id === data.strokeId
+          );
+          
+          if (currentStroke) {
+            currentStroke.points.push({ x: data.x, y: data.y });
+            
+            // Broadcast to all clients including sender
+            wss.clients.forEach((client) => {
+              if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({
+                  type: 'draw-continue',
+                  data: {
+                    strokeId: data.strokeId,
+                    x: data.x,
+                    y: data.y
+                  }
+                }));
+              }
+            });
+          }
+          break;
+          
+        case 'draw-end':
+          // Broadcast to all clients
+          wss.clients.forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify({
+                type: 'draw-end',
+                data: { strokeId: data.strokeId }
+              }));
+            }
+          });
+          break;
+          
+        case 'cursor-move':
+          const cursorUser = canvasState.users.get(userId);
+          
+          if (cursorUser) {
+            cursorUser.cursor = { x: data.x, y: data.y };
+            
+            // Broadcast cursor position to all other clients
+            broadcast({
+              type: 'cursor-move',
+              data: {
+                userId: userId,
+                x: data.x,
+                y: data.y,
+                color: cursorUser.color
+              }
+            }, ws);
+          }
+          break;
+          
+        case 'clear-canvas':
+          canvasState.strokes = [];
+          wss.clients.forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify({
+                type: 'clear-canvas',
+                data: {}
+              }));
+            }
+          });
+          break;
+  
+        case 'chat-message':
+          const chatUser = canvasState.users.get(userId);
+          
+          if (chatUser && data.message && data.message.trim()) {
+            const chatMessage = {
+              id: uuidv4(),
+              userId: userId,
+              userColor: chatUser.color,
+              message: data.message.trim(),
+              timestamp: data.timestamp || Date.now()
+            };
+            
+            // Broadcast chat message to all clients
+            broadcast({
+              type: 'chat-message',
+              data: chatMessage
+            });
+            
+            console.log(`Chat message from ${userId}: ${data.message}`);
+          }
+          break;
+          
+        case 'user-typing':
+          if (userId) {
+            broadcast({
+              type: 'user-typing',
+              data: {
+                userId: userId,
+                typing: data.typing
+              }
+            }, ws);
+          }
+          break;
+          
+        default:
+          console.log('Unknown message type:', type);
+      }
+    } catch (error) {
+      console.error('Error parsing WebSocket message:', error);
     }
   });
   
-  socket.on('draw-end', (data) => {
-    // Broadcast to all clients
-    io.emit('draw-end', { strokeId: data.strokeId });
-  });
-  
-  // Handle cursor movement
-  socket.on('cursor-move', (data) => {
-    const userId = connectedClients.get(socket.id);
-    const user = canvasState.users.get(userId);
+  // Handle WebSocket close
+  ws.on('close', () => {
+    console.log('User disconnected:', connectionId);
     
-    if (user) {
-      user.cursor = { x: data.x, y: data.y };
-      
-      // Broadcast cursor position to all other clients
-      socket.broadcast.emit('cursor-move', {
-        userId: userId,
-        x: data.x,
-        y: data.y,
-        color: user.color
-      });
-    }
-  });
-  
-  // Handle clear canvas
-  socket.on('clear-canvas', () => {
-    canvasState.strokes = [];
-    io.emit('clear-canvas');
-  });
-  
-  // Handle chat messages
-  socket.on('chat-message', (data) => {
-    const userId = connectedClients.get(socket.id);
-    const user = canvasState.users.get(userId);
-    
-    if (user && data.message && data.message.trim()) {
-      const chatMessage = {
-        id: uuidv4(),
-        userId: userId,
-        userColor: user.color,
-        message: data.message.trim(),
-        timestamp: data.timestamp || Date.now()
-      };
-      
-      // Broadcast chat message to all clients
-      io.emit('chat-message', chatMessage);
-      
-      console.log(`Chat message from ${userId}: ${data.message}`);
-    }
-  });
-  
-  // Handle typing indicators (optional)
-  socket.on('user-typing', (data) => {
-    const userId = connectedClients.get(socket.id);
-    if (userId) {
-      socket.broadcast.emit('user-typing', {
-        userId: userId,
-        typing: data.typing
-      });
-    }
-  });
-  
-  // Handle disconnect
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
-    
-    const userId = connectedClients.get(socket.id);
+    const userId = connectedClients.get(ws);
     if (userId) {
       canvasState.users.delete(userId);
-      connectedClients.delete(socket.id);
+      connectedClients.delete(ws);
       
       // Broadcast user left to all clients
-      io.emit('user-left', { userId });
+      broadcast({
+        type: 'user-left',
+        data: { userId }
+      });
     }
+  });
+  
+  // Handle WebSocket errors
+  ws.on('error', (error) => {
+    console.error('WebSocket error:', error);
   });
 });
 

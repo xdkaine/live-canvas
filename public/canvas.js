@@ -1,23 +1,9 @@
 class CollaborativeCanvas {
     constructor() {
-        this.socket = io({
-            //new cloudflare compatibility
-            transports: ['polling', 'websocket'], // Try polling first, then websocket
-            timeout: 20000,
-            reconnection: true,
-            reconnectionDelay: 1000,
-            reconnectionAttempts: 10,
-            maxReconnectionAttempts: 10,
-            forceNew: true,
-            path: '/socket.io/',
-            // Add headers for better Cloudflare compatibility
-            extraHeaders: {
-                'Origin': window.location.origin
-            },
-            // Handle cloudflare's connection management
-            pingTimeout: 60000,
-            pingInterval: 25000
-        });
+        this.socket = null;
+        this.reconnectAttempts = 0;
+        this.maxReconnectAttempts = 10;
+        this.reconnectDelay = 1000;
         this.canvas = document.getElementById('canvas');
         this.ctx = this.canvas.getContext('2d');
         this.isDrawing = false;
@@ -44,8 +30,126 @@ class CollaborativeCanvas {
         
         this.setupCanvas();
         this.setupEventListeners();
-        this.setupSocketEvents();
+        this.connectWebSocket();
         this.setupUI();
+    }
+    
+    connectWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        
+        try {
+            this.socket = new WebSocket(wsUrl);
+            
+            this.socket.onopen = () => {
+                console.log('WebSocket connected');
+                this.reconnectAttempts = 0;
+                this.updateConnectionStatus(true);
+            };
+            
+            this.socket.onmessage = (event) => {
+                try {
+                    const { type, data } = JSON.parse(event.data);
+                    this.handleServerMessage(type, data);
+                } catch (error) {
+                    console.error('Error parsing WebSocket message:', error);
+                }
+            };
+            
+            this.socket.onclose = () => {
+                console.log('WebSocket disconnected');
+                this.updateConnectionStatus(false);
+                this.attemptReconnect();
+            };
+            
+            this.socket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                this.updateConnectionStatus(false);
+            };
+        } catch (error) {
+            console.error('Failed to create WebSocket connection:', error);
+            this.attemptReconnect();
+        }
+    }
+    
+    attemptReconnect() {
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.reconnectAttempts++;
+            const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1); // Exponential backoff
+            
+            console.log(`Attempting to reconnect in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+            
+            setTimeout(() => {
+                this.connectWebSocket();
+            }, delay);
+        } else {
+            console.error('Max reconnection attempts reached');
+            this.showConnectionError();
+        }
+    }
+    
+    sendMessage(type, data) {
+        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+            this.socket.send(JSON.stringify({ type, data }));
+        } else {
+            console.warn('WebSocket not connected, message not sent:', type, data);
+        }
+    }
+    
+    updateConnectionStatus(connected) {
+        const statusElement = document.getElementById('connection-status');
+        if (statusElement) {
+            statusElement.textContent = connected ? 'Connected' : 'Disconnected';
+            statusElement.className = `connection-status ${connected ? 'connected' : 'disconnected'}`;
+        }
+    }
+    
+    showConnectionError() {
+        const errorElement = document.getElementById('connection-error');
+        if (errorElement) {
+            errorElement.style.display = 'block';
+            errorElement.textContent = 'Unable to connect to server. Please refresh the page.';
+        }
+    }
+    
+    handleServerMessage(type, data) {
+        switch (type) {
+            case 'canvas-state':
+                this.handleCanvasState(data);
+                break;
+            case 'user-info':
+                this.handleUserInfo(data);
+                break;
+            case 'user-joined':
+                this.handleUserJoined(data);
+                break;
+            case 'user-left':
+                this.handleUserLeft(data);
+                break;
+            case 'draw-start':
+                this.handleDrawStart(data);
+                break;
+            case 'draw-continue':
+                this.handleDrawContinue(data);
+                break;
+            case 'draw-end':
+                this.handleDrawEnd(data);
+                break;
+            case 'cursor-move':
+                this.handleCursorMove(data);
+                break;
+            case 'clear-canvas':
+                this.handleClearCanvas();
+                break;
+            case 'chat-message':
+                this.handleChatMessage(data);
+                break;
+            case 'user-typing':
+                this.handleUserTyping(data);
+                break;
+            default:
+                console.log('Unknown message type:', type, data);
+        }
     }
     
     setupCanvas() {
@@ -111,124 +215,89 @@ class CollaborativeCanvas {
         });
     }
     
-    setupSocketEvents() {
-        // Add comprehensive debugging for Cloudflare tunnel issues
-        console.log('Setting up socket events...');
-        console.log('Socket.IO client version:', io.version);
-        console.log('Current URL:', window.location.href);
-        console.log('WebSocket support:', typeof WebSocket !== 'undefined');
+    // Handler methods for different message types
+    handleCanvasState(data) {
+        // Store canvas strokes locally
+        this.canvasStrokes = [...data.strokes];
         
-        this.socket.on('connect', () => {
-            console.log('✅ Connected to server successfully!');
-            console.log('Transport:', this.socket.io.engine.transport.name);
-            console.log('Socket ID:', this.socket.id);
-            this.updateConnectionStatus(true);
-            document.getElementById('loading').style.display = 'none';
+        // Update users list
+        this.connectedUsers.clear();
+        data.users.forEach(user => {
+            this.connectedUsers.set(user.id, user);
         });
+        this.updateUserCount();
         
-        this.socket.on('connect_error', (error) => {
-            console.error('❌ Connection error:', error);
-            console.log('Error type:', error.type);
-            console.log('Error description:', error.description);
-            this.updateConnectionStatus(false);
-        });
+        // Redraw canvas with current transform
+        this.redrawCanvas();
+    }
+    
+    handleUserInfo(userInfo) {
+        this.userInfo = userInfo;
+        this.userColor = userInfo.color;
+        const colorPicker = document.getElementById('colorPicker');
+        if (colorPicker) {
+            colorPicker.value = this.userColor;
+        }
+        const loading = document.getElementById('loading');
+        if (loading) {
+            loading.style.display = 'none';
+        }
+    }
+    
+    handleUserJoined(userInfo) {
+        this.connectedUsers.set(userInfo.id, userInfo);
+        this.updateUserCount();
+    }
+    
+    handleUserLeft(data) {
+        this.connectedUsers.delete(data.userId);
+        this.removeUserCursor(data.userId);
+        this.updateUserCount();
+    }
+    
+    handleDrawStart(stroke) {
+        // Add stroke to local storage
+        this.canvasStrokes.push(stroke);
         
-        this.socket.on('disconnect', (reason) => {
-            console.log('🔌 Disconnected from server. Reason:', reason);
-            this.updateConnectionStatus(false);
-        });
+        // Set current stroke if it's from this user
+        if (stroke.userId === this.userInfo?.id) {
+            this.currentStroke = stroke;
+        }
         
-        this.socket.on('reconnect', (attemptNumber) => {
-            console.log('🔄 Reconnected after', attemptNumber, 'attempts');
-        });
-        
-        this.socket.on('reconnect_attempt', (attemptNumber) => {
-            console.log('🔄 Reconnection attempt', attemptNumber);
-        });
-        
-        this.socket.on('reconnect_error', (error) => {
-            console.error('❌ Reconnection error:', error);
-        });
-        
-        this.socket.on('reconnect_failed', () => {
-            console.error('❌ Reconnection failed after maximum attempts');
-        });
-        
-        // Monitor transport changes
-        this.socket.io.on('upgrade', () => {
-            console.log('⬆️ Transport upgraded to:', this.socket.io.engine.transport.name);
-        });
-        
-        this.socket.on('user-info', (userInfo) => {
-            this.userInfo = userInfo;
-            this.userColor = userInfo.color;
-            document.getElementById('colorPicker').value = this.userColor;
-        });
-        
-        this.socket.on('canvas-state', (state) => {
-            // Store canvas strokes locally
-            this.canvasStrokes = [...state.strokes];
-            
-            // Update users list
-            this.connectedUsers.clear();
-            state.users.forEach(user => {
-                this.connectedUsers.set(user.id, user);
-            });
-            this.updateUserCount();
-            
-            // Redraw canvas with current transform
-            this.redrawCanvas();
-        });
-        
-        this.socket.on('draw-start', (stroke) => {
-            // Add stroke to local storage
-            this.canvasStrokes.push(stroke);
-            this.drawStrokeStart(stroke);
-        });
-        
-        this.socket.on('draw-continue', (data) => {
-            // Update the stroke in local storage
-            const stroke = this.canvasStrokes.find(s => s.id === data.strokeId);
-            if (stroke) {
-                stroke.points.push({ x: data.x, y: data.y });
-            }
-            this.drawStrokeContinue(data);
-        });
-        
-        this.socket.on('draw-end', (data) => {
-            // Clean up the active stroke
-            if (this.activeStrokes && this.activeStrokes.has(data.strokeId)) {
-                this.activeStrokes.delete(data.strokeId);
-            }
-        });
-        
-        this.socket.on('cursor-move', (data) => {
-            this.updateRemoteCursor(data);
-        });
-        
-        this.socket.on('user-joined', (userInfo) => {
-            this.connectedUsers.set(userInfo.id, userInfo);
-            this.updateUserCount();
-        });
-        
-        this.socket.on('user-left', (data) => {
-            this.connectedUsers.delete(data.userId);
-            this.removeUserCursor(data.userId);
-            this.updateUserCount();
-        });
-        
-        this.socket.on('clear-canvas', () => {
-            this.canvasStrokes = [];
-            this.clearCanvas(false);
-        });
-        
-        this.socket.on('chat-message', (data) => {
-            this.displayChatMessage(data);
-        });
-        
-        this.socket.on('user-typing', (data) => {
-            this.showTypingIndicator(data);
-        });
+        this.drawStrokeStart(stroke);
+    }
+    
+    handleDrawContinue(data) {
+        // Update the stroke in local storage
+        const stroke = this.canvasStrokes.find(s => s.id === data.strokeId);
+        if (stroke) {
+            stroke.points.push({ x: data.x, y: data.y });
+        }
+        this.drawStrokeContinue(data);
+    }
+    
+    handleDrawEnd(data) {
+        // Clean up the active stroke
+        if (this.activeStrokes && this.activeStrokes.has(data.strokeId)) {
+            this.activeStrokes.delete(data.strokeId);
+        }
+    }
+    
+    handleCursorMove(data) {
+        this.updateRemoteCursor(data);
+    }
+    
+    handleClearCanvas() {
+        this.canvasStrokes = [];
+        this.clearCanvas(false);
+    }
+    
+    handleChatMessage(data) {
+        this.displayChatMessage(data);
+    }
+    
+    handleUserTyping(data) {
+        this.showTypingIndicator(data);
     }
     
     setupUI() {
@@ -270,7 +339,7 @@ class CollaborativeCanvas {
         // Clear canvas
         const clearButton = document.getElementById('clearCanvas');
         clearButton.addEventListener('click', () => {
-            this.socket.emit('clear-canvas');
+            this.sendMessage('clear-canvas', {});
         });
         
         // Chat controls
@@ -415,14 +484,14 @@ class CollaborativeCanvas {
     }
     
     startDrawing(e) {
-        if (!this.socket.connected) return;
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
         
         this.isDrawing = true;
         const coords = this.getCanvasCoordinates(e);
         const brushSize = document.getElementById('brushSize').value;
         
         // Send draw start event to server
-        this.socket.emit('draw-start', {
+        this.sendMessage('draw-start', {
             x: coords.x,
             y: coords.y,
             color: this.userColor,
@@ -431,12 +500,12 @@ class CollaborativeCanvas {
     }
     
     continueDrawing(e) {
-        if (!this.isDrawing || !this.currentStroke || !this.socket.connected) return;
+        if (!this.isDrawing || !this.currentStroke || !this.socket || this.socket.readyState !== WebSocket.OPEN) return;
         
         const coords = this.getCanvasCoordinates(e);
         
         // Send draw continue event to server
-        this.socket.emit('draw-continue', {
+        this.sendMessage('draw-continue', {
             strokeId: this.currentStroke.id,
             x: coords.x,
             y: coords.y
@@ -449,7 +518,7 @@ class CollaborativeCanvas {
         this.isDrawing = false;
         
         // Send draw end event to server
-        this.socket.emit('draw-end', {
+        this.sendMessage('draw-end', {
             strokeId: this.currentStroke.id
         });
         
@@ -457,7 +526,7 @@ class CollaborativeCanvas {
     }
     
     updateCursor(e) {
-        if (!this.socket.connected) return;
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
         
         const coords = this.getCanvasCoordinates(e);
         
@@ -466,7 +535,7 @@ class CollaborativeCanvas {
         
         // Throttle cursor updates to avoid overwhelming the server
         if (!this.lastCursorUpdate || Date.now() - this.lastCursorUpdate > 50) {
-            this.socket.emit('cursor-move', {
+            this.sendMessage('cursor-move', {
                 x: coords.x,
                 y: coords.y
             });
@@ -541,7 +610,7 @@ class CollaborativeCanvas {
         this.ctx.setTransform(this.zoom, 0, 0, this.zoom, this.panX, this.panY);
         
         if (emit) {
-            this.socket.emit('clear-canvas');
+            this.sendMessage('clear-canvas', {});
         }
     }
     
@@ -630,8 +699,8 @@ class CollaborativeCanvas {
         const chatInput = document.getElementById('chatInput');
         const message = chatInput.value.trim();
         
-        if (message && this.socket.connected) {
-            this.socket.emit('chat-message', {
+        if (message && this.socket && this.socket.readyState === WebSocket.OPEN) {
+            this.sendMessage('chat-message', {
                 message: message,
                 timestamp: Date.now()
             });
