@@ -237,6 +237,10 @@ class CollaborativeCanvas {
         });
         
         sendChatBtn.addEventListener('click', () => this.sendChatMessage());
+
+        const themeToggle = document.getElementById('themeToggle');
+        themeToggle.addEventListener('click', () => this.toggleTheme());
+        this.initializeTheme();
         
         // Initialize UI
         this.updateActiveColorSwatch();
@@ -641,6 +645,36 @@ class CollaborativeCanvas {
                 this.drawStroke(stroke);
             });
         }
+    }
+    
+    initializeTheme() {
+        const savedTheme = localStorage.getItem('canvas-theme') || 'light';
+        this.setTheme(savedTheme);
+    }
+    
+    setTheme(theme) {
+        const body = document.body;
+        const themeButton = document.getElementById('themeToggle');
+        const themeIcon = themeButton.querySelector('span');
+        
+        if (theme === 'dark') {
+            body.setAttribute('data-theme', 'dark');
+            themeIcon.textContent = '☀️';
+            themeButton.childNodes[1].textContent = ' Light Mode';
+        } else {
+            body.removeAttribute('data-theme');
+            themeIcon.textContent = '🌙';
+            themeButton.childNodes[1].textContent = ' Dark Mode';
+        }
+        
+        // saves it locally
+        localStorage.setItem('canvas-theme', theme);
+        this.currentTheme = theme;
+    }
+    
+    toggleTheme() {
+        const newTheme = this.currentTheme === 'dark' ? 'light' : 'dark';
+        this.setTheme(newTheme);
     }
 }
 
