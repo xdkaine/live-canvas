@@ -1,6 +1,14 @@
 class CollaborativeCanvas {
     constructor() {
-        this.socket = io();
+        this.socket = io({
+            //new cloudflare compatibility
+            transports: ['websocket', 'polling'],
+            timeout: 20000,
+            reconnection: true,
+            reconnectionDelay: 1000,
+            reconnectionAttempts: 5,
+            maxReconnectionAttempts: 5
+        });
         this.canvas = document.getElementById('canvas');
         this.ctx = this.canvas.getContext('2d');
         this.isDrawing = false;
